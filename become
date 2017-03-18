@@ -1,0 +1,607 @@
+#!/usr/cs/bin/perl58
+# become - switch to a privileged user
+
+use Fcntl;
+use Getopt::Std;
+
+%AFSCells = (
+  'andrew.cmu.edu'    => 'ANDREW.CMU.EDU',
+  'athena.mit.edu'    => 'ATHENA.MIT.EDU',
+  'cs.cmu.edu'        => 'CS.CMU.EDU',
+  'dementia.org'      => 'DEMENTIA.ORG',
+  'grand.central.org' => 'GRAND.CENTRAL.ORG',
+);
+
+## Useful programs
+$prog_xterm     = $ENV{ALT_XTERM} ? $ENV{ALT_XTERM} : 'xterm';
+
+@PROG_authwin   = ($prog_xterm, '-T', 'Authenticate', '-e');
+@PROG_unlog     = ('/usr/cs/bin/unlog');
+if (-d '/usr/athena/bin') {
+  @PROG_k5destroy = ('/usr/athena/bin/kdestroy', '-c');
+  @PROG_k5init    = ('/usr/athena/bin/kinit', '-c');
+  @PROG_k5list    = ('/usr/athena/bin/klist', '-c');
+  @PROG_k5test    = ('/usr/athena/bin/klist', '-s', '-c');
+  @PROG_k5afslog  = ('/usr/local/bin/aklog');
+  @PROG_k5princ   = ('/usr/athena/bin/klist');
+} elsif (-f '/usr/cs/bin/k5init') {
+  @PROG_k5destroy = ('/usr/cs/bin/k5destroy', '-c');
+  @PROG_k5init    = ('/usr/cs/bin/k5init', '-c');
+  @PROG_k5list    = ('/usr/cs/bin/k5list', '-c');
+  @PROG_k5test    = ('/usr/cs/bin/k5list', '--test', '-c');
+  @PROG_k5afslog  = ('/usr/cs/bin/afslog');
+  @PROG_k5princ   = ('/usr/cs/bin/k5list');
+} elsif (-f '/usr/local/bin/k5init') {
+  @PROG_k5destroy = ('/usr/local/bin/k5destroy', '-c');
+  @PROG_k5init    = ('/usr/local/bin/k5init', '-c');
+  @PROG_k5list    = ('/usr/local/bin/k5list', '-c');
+  @PROG_k5test    = ('/usr/local/bin/k5list', '--test', '-c');
+  @PROG_k5afslog  = ('/usr/local/bin/afs5log');
+  @PROG_k5princ   = ('/usr/local/bin/k5list');
+} elsif (-d '/usr/kerberos/bin') {
+  @PROG_k5destroy = ('/usr/kerberos/bin/kdestroy', '-c');
+  @PROG_k5init    = ('/usr/kerberos/bin/kinit', '-54', '-c');
+  @PROG_k5list    = ('/usr/kerberos/bin/klist', '-c');
+  @PROG_k5test    = ('/usr/kerberos/bin/klist', '-s', '-c');
+  if (-f '/usr/kerberos/bin/afslog') {
+    @PROG_k5afslog  = ('/usr/kerberos/bin/afslog');
+  } elsif (-f '/usr/bin/aklog') {
+    @PROG_k5afslog  = ('/usr/bin/aklog');
+    $is_aklog = 1;
+  }
+  @PROG_k5princ   = ('/usr/kerberos/bin/klist');
+} else {
+  @PROG_k5destroy = ('/usr/bin/kdestroy', '-c');
+  @PROG_k5init    = ('/usr/bin/kinit', '-c');
+  @PROG_k5list    = ('/usr/bin/klist', '-c');
+  @PROG_k5test    = ('/usr/bin/klist', '--test', '-c');
+  @PROG_k5princ   = ('/usr/bin/klist');
+  if (-f '/usr/bin/afslog') {
+    @PROG_k5afslog  = ('/usr/bin/afslog');
+  } elsif (-f '/usr/bin/aklog') {
+    @PROG_k5afslog  = ('/usr/bin/aklog');
+    $is_aklog = 1;
+  }
+}
+
+
+## Instance aliases
+# If one of these keys is used as the whole principal name, then it
+# will be expanded by using the username (from $USER) as the first
+# part, and the value from this table as the second part (instance).
+%Instance_Alias = (
+  'admin'     ,  'admin',
+  'admin-afs' ,  'admin-afs',
+  'afs'       ,  'admin-afs',
+  'deity'     ,  'deity',
+  'root'      ,  'root',
+  'misc'      ,  'misc',
+  'oracle'    ,  'oracle',
+);
+
+@Priv_Instances = ('admin', 'root', 'admin-afs', 'diety');
+
+
+## Realm aliases
+# If one of these keys is used as a realm name, then it will be
+# replaced by the corresponding value.  In addition, any realm
+# in /etc/krb.conf may be abbreviated to its first part, provided
+# that is unique.  For example, 'DEMENTIA.ORG' may be abbreviated
+# to 'DEMENTIA', or even 'dementia'.
+%Realm_Alias = (
+  ANDREW ,  'ANDREW.CMU.EDU',
+  ATHENA ,  'ATHENA.MIT.EDU',
+  CLUB   ,  'CLUB.CC.CMU.EDU',
+  CS     ,  'CS.CMU.EDU',
+  GCO    ,  'GRAND.CENTRAL.ORG',
+);
+
+
+## Print a usage message
+sub usage {
+  local($msg) = @_;
+
+  print STDERR "$00: $msg\n" if ($msg);
+  print STDERR "Usage: $00 [-k args] [-w] [-5] [-cCP] [-usniULD0] princ [cmd]
+       $00 [-k args] [-w] [-5] [-cCP] [-usni] princ -e file...
+       $00 [-k args] [-w] [-5] [-P] [-usni] -p princ host...
+       $00 -h
+
+  -h  Print this help message
+  -k  Additional args (space separated) to pass to kinit (V5 only)
+  -w  Run kinit in a window
+
+  -5  Use Kerberos V5 clients
+
+  -c  Get cross-realm AFS tokens (default)
+  -C  Don't get cross-realm AFS tokens
+  -P  Don't run in a new PAG or get any AFS tokens
+
+  -u  Use saved tickets; always update or create
+  -s  Use saved tickets; create if needed (default)
+  -n  Don't create saved tickets, but use if present
+  -i  Ignore saved tickets even if present
+  -0  Don't get any tickets or tokens
+
+  -U  Update or create saved tickets (no command run)
+  -L  List saved tickets (no command run)
+  -D  Destroy saved tickets (no command run)
+  -e  Edit the specified file(s)
+  -p  Push tickets to specified host(s)
+";
+  exit 0;
+}
+
+
+## Parse command-line options
+sub parse_opts {
+  ($00 = $0) =~ s/.*\///;
+  getopts('hk:w5cCPusni0ULDldpe') || &usage('Invalid option!');
+  &usage() if ($opt_h);
+
+  $opt_L = 1 if $opt_l;  # backward compatibility
+  $opt_D = 1 if $opt_d;  # backward compatibility
+  $modes_cCP = $opt_c + $opt_C + $opt_P;
+  $modes     = $opt_u + $opt_s + $opt_n + $opt_i
+             + $opt_0 + $opt_U + $opt_L + $opt_D;
+  if ($modes     > 1) { &usage('Use at most one of -u -s -n -i -0 -U -L -D') }
+  if ($modes_cCP > 1) { &usage('Use at most one of -c -C -P') }
+  if ($opt_p) {
+    &usage('-c makes no sense with -p') if $opt_c;
+    &usage('-C makes no sense with -p') if $opt_C;
+    &usage('-D makes no sense with -p') if $opt_D;
+    &usage('-L makes no sense with -p') if $opt_L;
+    &usage('-U makes no sense with -p') if $opt_U;
+    &usage('-0 makes no sense with -p') if $opt_0;
+  }
+  if ($opt_e) {
+    &usage('-D makes no sense with -e') if $opt_D;
+    &usage('-L makes no sense with -e') if $opt_L;
+    &usage('-U makes no sense with -e') if $opt_U;
+    &usage('-0 makes no sense with -e') if $opt_0;
+    &usage('Use at most one of -e or -p') if $opt_p;
+  }
+
+  $opt_C = 1 unless $modes_cCP;
+
+  $principal = shift(@ARGV);
+  &usage("Principal name required!") unless ($principal);
+  &usage('At least one hostname is required') if ($opt_p && !@ARGV);
+  &usage('At least one filename is required') if ($opt_e && !@ARGV);
+}
+
+
+## Load realm information from krb.conf
+sub load_krb_conf {
+  local(%realms, $r, @r);
+  local($path) = '/etc/krb.conf';
+
+  return if ($krb_conf_loaded);
+  if (-f '/etc/krb.conf') {
+    $path = '/etc/athena/krb.conf' if -f '/etc/athena/krb.conf';
+    open(KRBCONF, $path) || die "$00: open $path: $!\n";
+    chop($DefaultRealm = <KRBCONF>);
+    while (<KRBCONF>) {
+      chop;
+      @r = split;
+      $realms{$r[0]} = 'x';
+    }
+    close(KRBCONF);
+
+    @Realms = sort keys %realms;
+    foreach $r (@Realms) {
+      @r = split(/\./, $r);
+      if ($Realms{$r[0]}) { $Realms{$r[0]} = '-' }
+      else                { $Realms{$r[0]} = $r  }
+    }
+    foreach $r (keys %Realms) {
+      delete $Realms{$r} if ($Realms{$r} eq '-');
+    }
+  } else {
+    $path = '/etc/krb5.conf';
+    open(KRBCONF, $path) || die "$00: open $path: $!\n";
+    while (<KRBCONF>) {
+      if (/^\s*default_realm\s*=\s*(\S+)/) {
+        $DefaultRealm = $1;
+        last;
+      }
+    }
+    close(KRBCONF);
+    $DefaultRealm = 'CS.CMU.EDU' unless defined $DefaultRealm;
+  }
+  $krb_conf_loaded = 1;
+}
+
+
+## Expand a potential realm alias into the full realm name
+sub expand_realm_alias {
+  local($alias) = @_;
+  local($ucalias) = $alias;
+
+  $ucalias =~ tr/a-z/A-Z/;
+  if ($Realm_Alias{$ucalias}) { $Realm_Alias{$ucalias} }
+  elsif ($Realms{$ucalias})   { $Realms{$ucalias} }
+  else                        { $alias }
+}
+
+
+## Take the principal name given on the command line and expand it
+## into canonical form.  This includes processing realm and instance
+## aliases and looking up the default realm, if needed.
+sub parse_principal {
+  local($principal) = @_;
+  local($name, $inst, $realm, $sep);
+  local($klistcmd);
+
+  if ($principal eq '-') {
+    $klistcmd = join(' ', @PROG_k5princ);
+    open(KLIST, "$klistcmd|") || die "$klistcmd: $!\n";
+    while (<KLIST>) {
+      if (/^\s*Principal:\s*(\S+)/) {
+        $principal = $1;
+        last;
+      }
+    }
+    close(KLIST);
+    die "Unable to determine principal name!\n" if $principal eq '-';
+  }
+
+  if ($principal =~ /@/) {
+    ($principal, $realm) = ($`, $');
+    $realm = &expand_realm_alias($realm);
+  } else {
+    $realm = $DefaultRealm;
+  }
+
+  if ($principal =~ /\//) {
+    ($name, $inst) = ($`, $');
+  } elsif ($Instance_Alias{$principal}) {
+    $name = $ENV{USER};
+    $inst = $Instance_Alias{$principal};
+    $principal = "$name/$inst";
+  } elsif ($principal eq '') {
+    $name = $principal = $ENV{USER};
+  } else {
+    $name = $principal;
+  }
+
+  $principal .= '@' . $realm;
+  $opt_s = 1 if (($name eq $ENV{USER} || $name eq 'resfac') && !$modes);
+  ($principal, $inst, $realm);
+}
+
+
+## Compute a ticket file name
+sub compute_tkfile {
+  local($principal, $isdash) = @_;
+  local($uniq) = 'aaa000';
+  local($tktbase, $tkt, $rtkt, $ruid);
+
+  if (-d '/tkt')       { $tktbase = '/tkt/' }
+  elsif (-d '/ticket') { $tktbase = '/ticket/' }
+  else                 { $tktbase = '/tmp/' }
+
+  $tkt = $principal;
+  $tkt =~ s/\@\Q$DefaultRealm\E$//;
+  $tkt =~ tr{/a-zA-Z0-9.-}{_}c;
+  $tkt =~ tr{/}{+};
+
+  # KLUDGE!
+  # When pushing, remote machines might not use the same UIDs.
+  # So, this knows what jhutz's uid on CS build machines is.
+  $ruid = ($ENV{USER} eq 'jhutz') ? 2322 : $<;
+  $rtkt = "$tktbase/$tkt\@$ruid";
+  $tkt = "$tktbase/$tkt\@$<";
+
+  $Orig_V5_Tickets = $ENV{KRB5CCNAME};
+  if ($isdash) {
+    $Saved_V5_Tickets = $Remote_V5_Tickets = $ENV{KRB5CCNAME};
+  } else {
+    $Saved_V5_Tickets = "$tkt.v5";
+    $Remote_V5_Tickets = "$rtkt.v5";
+  }
+  for (;;) {
+    $My_V5_Tickets = "$tkt.$$.$uniq.v5";
+    last unless -e $My_V5_Tickets;
+    $uniq++;
+  }
+}
+
+
+## Switch to a new PAG
+## This is kind of icky, but at least there are no arguments.
+## The alternative is to use pagsh, which would mangle our command line.
+sub setpag {
+  local($err, $syscalldata);
+
+  $VIOC_SYSCALL = 0x40004301 | (length(pack('p','')) << 16);
+
+  open(AFSH, '/usr/cs/include/afs/afs_args.h') ||
+  open(AFSH, '/usr/cs/include/afs/afs.h') ||
+  open(AFSH, '/usr/include/afs/afs_args.h') ||
+  open(AFSH, '/usr/include/afs/afs.h') ||
+  open(AFSH, '/usr/local/include/afs/afs_args.h') ||
+  open(AFSH, '/mit/afsuser/include/afs/afs_args.h') ||
+  open(AFSH, '/usr/local/include/afs/afs.h') ||
+  open(AFSH, '/mit/afsuser/include/afs/afs.h') ||
+  #open(AFSH, '/afs/cs.cmu.edu/misc/afs/common/3.4a/include/afs/afs.h') ||
+  die 'Unable to find afs/afs.h!';
+  while(<AFSH>) {
+    if (/^\#define\s*AFSCALL_SETPAG\s*([-+\d]+)/) { $AFSCALL_SETPAG  = eval $1 }
+    if (/^\#define\s*AFSCALL_PIOCTL\s*([-+\d]+)/) { $AFSCALL_PIOCTL  = eval $1 }
+    if (/^\#define\s*AFS_SYSCALL\s*([-+\d]+)/)    { $AFS_DEF_SYSCALL = eval $1 }
+    last if ($AFSCALL_SETPAG && $AFS_DEF_SYSCALL);
+  }
+  close(AFSH);
+
+  if (-f '/proc/fs/openafs/afs_ioctl') {
+    sysopen(AFSIOCTL,'/proc/fs/openafs/afs_ioctl',O_RDONLY);
+    $syscalldata=pack('x[L!4]L!', $AFSCALL_SETPAG+0);
+    #$err = ioctl(AFSIOCTL, $VIOC_SYSCALL, pack('P',$syscalldata));
+    $err = ioctl(AFSIOCTL, $VIOC_SYSCALL, $syscalldata);
+    if (!$err) { die "$00: afs_ioctl:setpag() failed: $!\n" }
+    close(AFSIOCTL);
+    return;
+  }
+
+  open(PARAMH, '/usr/cs/include/afs/param.h') ||
+  open(PARAMH, '/usr/local/include/afs/param.h') ||
+  open(PARAMH, '/mit/afsuser/include/afs/param.h') ||
+  open(PARAMH, '/afs/cs.cmu.edu/misc/afs/@sys/3.4a/include/afs/param.h') ||
+  die 'Unable to find afs/param.h!';
+  while(<PARAMH>) {
+    if (/^\#define\s*AFS_SETPAG\s*([-+\d]+)/)  { $AFS_SETPAG  = eval $1 }
+    if (/^\#define\s*AFS_PIOCTL\s*([-+\d]+)/)  { $AFS_PIOCTL  = eval $1 }
+    if (/^\#define\s*AFS_SYSCALL\s*([-+\d]+)/) { $AFS_SYSCALL = eval $1 }
+    last if ($AFS_SYSCALL);
+  }
+  close(PARAMH);
+
+# print "AFS_SETPAG      = $AFS_SETPAG\n";
+# print "AFS_SYSCALL     = $AFS_SYSCALL\n";
+# print "AFSCALL_SETPAG  = $AFSCALL_SETPAG\n";
+# print "AFS_DEF_SYSCALL = $AFS_DEF_SYSCALL\n";
+  $AFS_SYSCALL = $AFS_DEF_SYSCALL if (!$AFS_SYSCALL);
+
+  if    ($AFS_SETPAG) { $err = syscall($AFS_SETPAG+0) }
+  else                { $err = syscall($AFS_SYSCALL+0, $AFSCALL_SETPAG+0) }
+  if ($err) { die "$00: setpag() failed: $!\n" }
+}
+
+
+## Run a program in its own PAG.  Don't mess with the ticket file
+sub setpag_system {
+  local(@prog) = @_;
+  local($pid);
+  
+  if ($opt_P) {
+    $pid = fork();
+    if ($pid) {
+      waitpid($pid, 0);
+      $?;
+    } elsif (defined($pid)) {
+      &setpag();
+      exec(@prog);
+      die "$00: exec $prog[0] failed: $!\n";
+    } else {
+      die "$00: fork failed: $!\n";
+    }
+  } else {
+    system(@prog);
+  }
+}
+
+
+## Get AFS tokens
+sub get_token {
+  local($cell, $realm) = @_;
+  local(@args);
+
+  @args = (@PROG_k5afslog);
+  if ($is_aklog) { push(@args, $cell, '-k', $realm) }
+  else           { push(@args, '-k', $realm, $cell) }
+  system(@args);
+}
+
+
+## Invalidate our AFS tokens
+sub unlog {
+  system(@PROG_unlog);
+}
+
+
+## Compute the pathname of a V5 ticket file
+sub tkt_path {
+  if ($_[0] =~ /^FILE:/)       { return $' }
+  elsif ($_[0] =~ m#^[^:/]*:#) { die "Non-file ccache: $_[0]\n" }
+  else                         { $_[0] }
+}
+
+
+## Update tickets in the specified file
+sub update_tkt {
+  local($tkfile5, $principal) = @_;
+  local(@args, $oldtkfile, @k5args, $tkpath5);
+
+  $tkpath5 = tkt_path($tkfile5);
+  open(TKFILE, ">$tkpath5") || die "$00: open $tkpath5: $!\n";
+  close(TKFILE);
+  chmod(0600, $tkpath5) || die "$00: chmod $tkpath5: $!\n";
+
+  @k5args = split(' ', $opt_k) if ($opt_k);
+  @args = (@PROG_k5init, $tkfile5, @k5args, $principal);
+  if ($opt_w) { @args = (@PROG_authwin, @args) }
+# else        { print "Getting initial tickets for $principal...\n" }
+  &setpag_system(@args);
+
+  if (!&tkt_current($tkfile5)) {
+    print "Failed to get tickets\n";
+    exit 1;
+  }
+}
+
+
+## Destroy tickets in the specified file
+sub destroy_tkt {
+  local($tkfile5) = @_;
+
+  &setpag_system(@PROG_k5destroy, $tkfile5);
+}
+
+
+## Copy one ticket file to another
+sub copy_tkt {
+  local($source, $target) = @_;
+
+  open(SOURCE, $source) || die "$00: open $source: $!\n";
+  open(TARGET, ">$target") || die "$00: open $target: $!\n";
+  chmod(0600, $target) || die "$00: chmod $target: $!\n";
+  while (<SOURCE>) { print TARGET $_ }
+  close(TARGET);
+  close(SOURCE);
+}
+
+
+## Check if tickets are current
+sub tkt_current {
+  local($tkfile5) = @_;
+
+  !system(@PROG_k5test, $tkfile5);
+}
+
+
+## List tickets
+sub list_tkt {
+  local($tkfile5) = @_;
+
+  system(@PROG_k5list, $tkfile5);
+}
+
+
+## Get tickets in $My_Tickets.  Update saved tickets if appropriate
+sub get_ticket {
+  local($principal) = @_;
+
+  if ($opt_L) {
+    ## List saved ticket file
+    &list_tkt($Saved_V5_Tickets);
+    exit(0);
+
+  } elsif ($opt_D) {
+    ## Destroy saved ticket file
+    &destroy_tkt($Saved_V5_Tickets);
+    exit(0);
+
+  } elsif ($opt_U) {
+    ## Update/create saved ticket file
+    &update_tkt($Saved_V5_Tickets, $principal);
+    exit(0) if $opt_U;
+
+  } elsif ($opt_u) {
+    ## Update saved ticket file even if not needed
+    &update_tkt($Saved_V5_Tickets, $principal);
+    &copy_tkt(tkt_path($Saved_V5_Tickets), tkt_path($My_V5_Tickets));
+
+  } elsif ($opt_s) {
+    ## Update saved ticket file if needed
+    if (!&tkt_current($Saved_V5_Tickets)) {
+      &update_tkt($Saved_V5_Tickets, $principal);
+    }
+    &copy_tkt(tkt_path($Saved_V5_Tickets), tkt_path($My_V5_Tickets));
+
+  } elsif ($opt_i) {
+    ## Ignore saved tickets; generate new
+    &update_tkt($My_V5_Tickets, $principal);
+
+  } elsif (!$opt_0) {
+    ## Use saved tickets if present
+    if (!&tkt_current($Saved_V5_Tickets)) {
+      &update_tkt($My_V5_Tickets, $principal);
+    } else {
+      &copy_tkt(tkt_path($Saved_V5_Tickets), tkt_path($My_V5_Tickets));
+    }
+  }
+}
+
+
+## Get tokens, for local cells or all cells
+sub get_tokens {
+  local($realm) = @_;
+  local($cell, @cells, @xcells);
+
+  foreach $cell (sort keys %AFSCells) {
+    if ($AFSCells{$cell} eq $realm) { push (@cells,  $cell) }
+    else                            { push (@xcells, $cell) }
+  }
+  push(@cells, @xcells) unless $opt_C;
+  foreach $cell (@cells) {
+    #print "$cell...";
+    get_token($cell, $AFSCells{$cell});
+  }
+  #print "\n";
+}
+
+
+### MAIN PROGRAM
+
+## Setup
+$| = 1;
+&parse_opts();
+&load_krb_conf();
+$isdash = ($principal eq '-');
+($principal, $inst, $realm) = &parse_principal($principal);
+&compute_tkfile($principal, $isdash);
+
+if ($opt_e) {
+  # XXX copy everything to temporary files
+  # XXX run an editor
+}
+
+&setpag() unless ($opt_L || $opt_P);
+&get_ticket($principal);
+
+if ($opt_p) {
+  if (defined($Orig_V5_Tickets)) { $ENV{KRB5CCNAME} = $Orig_V5_Tickets }
+  else                           { delete $ENV{KRB5CCNAME} } 
+  print "Copying tickets:";
+  foreach $host (@ARGV) {
+    ($shorthost = $host) =~ s/\..*//;
+    print " $shorthost.";
+    system('scp', '-Bpq', $My_V5_Tickets, "$host:$Remote_V5_Tickets");
+    print "\b*";
+  }
+  print "\n";
+  exit(0);
+}
+
+$ENV{KRB5CCNAME} = $My_V5_Tickets;
+
+&get_tokens($realm) unless ($opt_P || $opt_0);
+
+if (grep($_ eq $inst, @Priv_Instances)) {
+  $ENV{PRIV_USER} = $principal;
+  $ENV{PRIV_USER} =~ s/\@$DefaultRealm$//;
+  delete $ENV{NOPRIV_USER} if exists $ENV{NOPRIV_USER};
+} else {
+  $ENV{NOPRIV_USER} = $principal;
+  $ENV{NOPRIV_USER} =~ s/\@$DefaultRealm$//;
+  delete $ENV{PRIV_USER} if exists $ENV{PRIV_USER};
+}
+
+if ($principal eq 'jhutz/admin@GRAND.CENTRAL.ORG') {
+  $ENV{AFSCELL} = 'grand.central.org';
+}
+if ($opt_e) {
+  # XXX copy the files back
+} elsif (@ARGV) {
+  system(@ARGV);
+} else {
+  system($ENV{SHELL});
+}
+
+if ($opt_w) {
+  open(STDOUT, '>/dev/null');
+  open(STDERR, '>/dev/null');
+}
+&destroy_tkt($My_V5_Tickets);
+&unlog() unless($opt_P);
