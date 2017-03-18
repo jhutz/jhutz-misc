@@ -1,0 +1,250 @@
+#!/usr/local/bin/perl5
+# timestats - Compute statistics on timelog data
+
+require 'getopts.pl';
+
+
+$header = '
+%-15s  Time       Pct   Description
+===============  =========  ====  ============================================
+';
+
+format STDOUT =
+@<<<<<<<<<<<<<<  @>>>>>>>>  @>>%  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$category,       $hms,      $pct, $desc
+.
+
+format nopct =
+@<<<<<<<<<<<<<<  @>>>>>>>>        @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$category,       $hms,            $desc
+.
+
+
+## Usage message
+($P = $0) =~ s/.*\/$//;
+sub usage {
+  my(@msg) = @_;
+  print STDERR "$P: ", @msg, "\n" if (@msg);
+  print STDERR "usage: $P [options] timelog-file...\n";
+  print STDERR "  -C path   category description file\n";
+  print STDERR "  -a        print all summaries (-cestw)\n";
+  print STDERR "  -c        print summary by category (tag/work)\n";
+  print STDERR "  -d        debug effort categories\n";
+  print STDERR "  -e        print summary by effort category\n";
+  print STDERR "  -h        print this help message\n";
+  print STDERR "  -s        print summary by subtag\n";
+  print STDERR "  -t        print summary by tag (default)\n";
+  print STDERR "  -w        print summary by work-type\n";
+  exit(0);
+}
+
+
+## Parse arguments and stuff
+sub parse_args {
+  $opt_C = "/afs/cs.cmu.edu/user/jhutz/usr/Private/timelog/Categories\n";
+
+  &Getopts('C:acdehstw') || &usage();
+  &usage() if ($opt_h);
+
+  if ($opt_a)
+    { $opt_c = $opt_e = $opt_s = $opt_t = $opt_w = 1 }
+  if (!$opt_c && !$opt_e && !$opt_s && !$opt_t && !$opt_w)
+    { $opt_t = 1 }
+}
+
+
+## Read the categories file
+sub read_categories {
+  open(CATEGORIES, $opt_C) || die "Unable to open categories file: $!\n";
+  while (<CATEGORIES>) {
+    next if (/^\s*\#/ || /^\s*$/);
+    if (/^\s*\[(\S+)\]\s*(.*\S+)\s*$/)    { $TagDesc{$1}    = $2 }
+    elsif (/^\s*\/(\S+)\s*(.*\S+)\s*$/)   { $WorkDesc{$1}   = $2 }
+    elsif (/^\s*\%(\S+)\s*(.*\S+)\s*$/)   { $EffortDesc{$1} = $2 }
+    elsif (/^\s*(\S+)\s*=>\s*(\S+)\s*$/)  { $Alias{$1}      = $2 }
+    elsif (/^\s*(\S+)\s*%(\S+)\s*$/)      { push(@Mappings, [$1, $2]) }
+    elsif (/^\s*(\S+)\s*(---)\s*$/)       { push(@Mappings, [$1, $2]) }
+  }
+  close(CATEGORIES);
+}
+
+
+## Select an effort category
+sub select_effort {
+  my($tagmaj, $tagmin, $work) = @_;
+  my($mapping, $pat, $effort);
+  my($patmaj, $patmin, $patwork);
+
+  foreach $mapping (@Mappings) {
+    ($pat, $effort) = @$mapping;
+    if ($pat =~ /\//) { ($pat,    $patwork) = ($`, $') } else { $patwork = '' }
+    if ($pat =~ /\:/) { ($patmaj, $patmin)  = ($`, $') } else { $patmaj = $pat, $patmin = '' }
+    if ($patmaj ne $tagmaj
+    || ($patmin && $patmin ne $tagmin)
+    || ($patwork && $patwork ne $work))
+      { next }
+    return $effort;
+  }
+  print STDERR "effort unknown: $tagmaj/$tagmin:$work\n" if ($opt_d);
+  return 'unknown';
+}
+
+
+## Read timelog files
+sub read_timelogs {
+  my($hh, $mm, $ss, $time, $desc);
+  my($cat, $tag, $tagmaj, $tagmin, $work);
+
+  while (<>) {
+    if (/^\d+-...-\d+[\s_\*]+\d+:\d+:\d+-\d+:\d+:\d+\s+(\d+):(\d+):(\d+)\s+(.*\S+)\s*$/) {
+      ($hh, $mm, $ss, $desc) = ($1, $2, $3, $4);
+    } elsif (/^\d+\/\d+[\s_\*]+\d+:\d+-\d+:\d+\s+(\d+):(\d+):(\d+)\s+(.*\S+)\s*$/) {
+      ($hh, $mm, $ss, $desc) = ($1, $2, $3, $4);
+    } else { next }
+    if ($desc =~ /^\[([^]\s]+)\]\s*/) {
+      ($tag, $desc) = ($1, $');
+      $tag = 'mg/mg' if ($tag eq 'mg');
+      $cat = $tag;
+    } else {
+      $tag = 'notag';
+      $cat = ':' . $desc;
+    }
+    if ($tag =~ /\//)                 { ($tag, $work) = ($`, $') } else { $work = 'nowork' }
+    if ($Alias{$tag})                 { $tag = $Alias{$tag} }
+    if ($tag =~ /\:/)                 { ($tagmaj, $tagmin) = ($`, $') }
+    else { $tagmaj = $tag; $tagmin = '' }
+    $time = ($hh * 3600) + ($mm * 60) + $ss;
+    $Total_Time += $time;
+    $TagMaj_Time{$tagmaj} += $time;
+    $Tag_Time{$tag} += $time;
+    $Subtag_Time{$tagmaj}{$tagmin} += $time;
+    $Work_Time{$work} += $time;
+    $Cat_Time{$cat} += $time;
+    $Effort_Time{&select_effort($tagmaj, $tagmin, $work)} += $time;
+  }
+}
+
+
+## Print a single summary line
+sub print_summary_line {
+  local($category, $time, $desc) = @_;
+  local($pct, $hh, $mm, $ss, $hms);
+
+  $pct = ($time / $Total_Time) * 100; $pct =~ s/\..*//;
+  $ss = $time % 60; $time = ($time - $ss) / 60;
+  $mm = $time % 60; $hh   = ($time - $mm) / 60;
+
+  $hms = sprintf("%3d:%02d:%02d", $hh, $mm, $ss);
+  $~ = ($category eq '---') ? 'nopct' : 'STDOUT';
+  write;
+}
+
+
+## Compute description of a tag
+sub make_tag_desc {
+  my($tag) = @_;
+  my($subtag);
+
+  if ($TagDesc{$tag}) { $TagDesc{$tag} }
+  elsif ($tag =~ /\:/) {
+    ($tag, $subtag) = ($`, $');
+    if ($TagDesc{$tag}) { $TagDesc{$tag} . " ($subtag)" }
+    else { '' }
+  } else { '' }
+}
+
+
+## Compute description of a category (tag/work)
+sub make_cat_desc {
+  my($cat) = @_;
+
+  if ($cat =~ /^:/) { $' }
+  elsif ($cat =~ /\//) { &make_tag_desc($`) . ' ' . $WorkDesc{$'} }
+  else { &make_tag_desc($cat) }
+}
+
+
+## Print summary by category (tag/work)
+sub print_cat_summary {
+  my($category, $time, $desc);
+
+  printf($header, 'Category');
+  foreach $category (sort keys %Cat_Time) {
+    $time = $Cat_Time{$category};
+    $desc = &make_cat_desc($category);
+    if ($category =~ /^:/) { $category = '' }
+    &print_summary_line($category, $time, $desc);
+  }
+  &print_summary_line('', $Total_Time, 'Total');
+}
+
+
+## Print summary by tag (and possibly subtag)
+sub print_tag_summary {
+  my($category, $subtag);
+
+  printf($header, 'Tag');
+  foreach $category (sort keys %TagMaj_Time) {
+    &print_summary_line($category, $TagMaj_Time{$category},
+                        &make_tag_desc($category));
+    if ($opt_s) {
+      foreach $subtag (sort keys %{$Subtag_Time{$category}}) {
+        &print_summary_line("  $category:$subtag",
+                            $Subtag_Time{$category}{$subtag},
+                            &make_tag_desc("$category:$subtag"));
+      }
+    }
+  }
+  &print_summary_line('', $Total_Time, 'Total');
+}
+
+
+## Print summary by subtag only
+sub print_subtag_summary {
+  my($category);
+
+  printf($header, 'Tag');
+  foreach $category (sort keys %Tag_Time) {
+    &print_summary_line($category, $Tag_Time{$category},
+                        &make_tag_desc($category));
+  }
+  &print_summary_line('', $Total_Time, 'Total');
+}
+
+
+## Print summary by work type
+sub print_work_summary {
+  my($category);
+
+  printf($header, 'Work Type');
+  foreach $category (sort keys %Work_Time) {
+    &print_summary_line($category, $Work_Time{$category},
+                        $WorkDesc{$category});
+  }
+  &print_summary_line('', $Total_Time, 'Total');
+}
+
+
+## Print summary by effort category
+sub print_effort_summary {
+  my($category, $realtotal);
+
+  $realtotal = $Total_Time;
+  $Total_Time -= $Effort_Time{'---'};
+  printf($header, 'Category');
+  foreach $category (sort keys %Effort_Time) {
+    &print_summary_line($category, $Effort_Time{$category},
+                        $EffortDesc{$category});
+  }
+  &print_summary_line('', $Total_Time, 'Total');
+  $Total_Time = $realtotal;
+}
+
+&parse_args();
+&read_categories();
+&read_timelogs();
+&print_cat_summary()    if ($opt_c);
+&print_tag_summary()    if ($opt_t);
+&print_subtag_summary() if ($opt_s && !$opt_t);
+&print_work_summary()   if ($opt_w);
+&print_effort_summary() if ($opt_e);
