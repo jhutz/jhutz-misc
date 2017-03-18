@@ -594,6 +594,7 @@ if ($principal eq 'jhutz/admin@GRAND.CENTRAL.ORG') {
 if ($opt_e) {
   # XXX copy the files back
 } elsif (@ARGV) {
+  splice(@ARGV, 1, 0, '--nofork') if $ARGV[0] =~ /^g(ex|vim|view)$/;
   system(@ARGV);
 } else {
   system($ENV{SHELL});
