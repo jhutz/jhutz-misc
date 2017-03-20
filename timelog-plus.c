@@ -6,11 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <time.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <termios.h>
 #include <signal.h>
+#include <ctype.h>
 
 
 /* Constants */
@@ -463,7 +465,7 @@ char *readln(task_info *task)
 }
 
 
-void tty_setup(void)
+void tty_setup(int sig)
 {
   struct termios tty_settings;
 
@@ -494,7 +496,7 @@ void main(int argc, char **argv)
   action.sa_handler = tty_setup;
   action.sa_flags = SA_RESTART;
   sigaction(SIGCONT, &action, 0);
-  tty_setup();
+  tty_setup(0);
 
   timelog_path = argv[1];
   log_fd = open(timelog_path, O_RDWR | O_CREAT, 0644);
