@@ -256,7 +256,7 @@ void update_tasks(char *text)
   }
 
   /* If the current task is not a break, log time on it */
-  if (!is_break) {
+  if (!is_break && when >= entry_time) {
     stack->time_logged += when - entry_time;
     log_task(stack, 0, finish ? TASK_STATE_DONE : TASK_STATE_CUR);
   }
