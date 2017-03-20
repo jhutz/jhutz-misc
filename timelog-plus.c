@@ -473,7 +473,8 @@ char *readln(task_info *task)
 
 void gone(int sig)
 {
-  hangup = 1;
+  if (sig == SIGUSR1) hangup = 1;
+  else hangup = -1;
 }
 
 void tty_setup(int sig)
@@ -514,6 +515,7 @@ void main(int argc, char **argv)
   sigaction(SIGHUP, &action, 0);
   sigaction(SIGINT, &action, 0);
   sigaction(SIGTERM, &action, 0);
+  sigaction(SIGUSR1, &action, 0);
 
   timelog_path = argv[1];
   log_fd = open(timelog_path, O_RDWR | O_CREAT, 0644);
@@ -537,6 +539,7 @@ void main(int argc, char **argv)
     else printf("Got ^D\n");
 #endif
     update_tasks(text);
+    if (hangup > 0) hangup = 0;
   }
   if (!is_break)
     update_tasks(0);
