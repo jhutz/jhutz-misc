@@ -40,6 +40,7 @@ typedef struct task_info {
 
 
 /* Globals */
+static struct termios orig_tty_settings;
 task_info *stack;                /* Current task stack pointer */
 FILE *timelog_file;              /* Logfile pointer */
 char *timelog_path;              /* Path to logfile */
@@ -480,6 +481,7 @@ void tty_setup(int sig)
   struct termios tty_settings;
 
   tcgetattr(0, &tty_settings);
+  orig_tty_settings = tty_settings;
   tty_settings.c_oflag |=  OPOST;
   tty_settings.c_oflag &=~ OCRNL;
   tty_settings.c_lflag |=  ISIG;
@@ -539,5 +541,6 @@ void main(int argc, char **argv)
   if (!is_break)
     update_tasks(0);
   fclose(timelog_file);
+  tcsetattr(0, TCSANOW, &orig_tty_settings);
   exit(0);
 }
