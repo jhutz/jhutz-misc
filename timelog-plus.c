@@ -47,6 +47,7 @@ time_t entry_time;               /* Time we entered the current task */
 time_t min_entry_time;           /* Minimum time user may enter */
 int is_break;                    /* Currnet task is a break (not on stack) */
 int task_depth;                  /* Depth of task stack */
+int hangup;                      /* Set if we're shutting down */
 
 int f_continuous_time = 1;       /* Display current time iff set */
 
@@ -316,7 +317,7 @@ char *readln(task_info *task)
   fd_set set;
 
   /* Wait for input to be ready, periodically updating the prompt */
-  for (;;) {
+  while (!hangup) {
     FD_ZERO(&set);
     FD_SET(0, &set);
     tv.tv_sec = 1;
@@ -332,7 +333,7 @@ char *readln(task_info *task)
   }
 
   /* Read the user's input */
-  for (;;) {
+  while (!hangup) {
     if (input_len >= buf_size - 1) {
       buf_size += BUF_CHUNK;
       buf = xmalloc(buf_size, buf);
@@ -357,6 +358,7 @@ char *readln(task_info *task)
 
     n = read(0, &c, 1);
     if (!n) continue;
+    if (n < 0 && errno == EINTR) continue;
     if (n < 0) {
       fprintf(stderr, "\nread() failed: %s\n", strerror(errno));
       exit(1);
@@ -462,8 +464,16 @@ char *readln(task_info *task)
         continue;
     }
   }
+  fputc('\n', stdout);
+  fflush(stdout);
+  return 0; // hangup
 }
 
+
+void gone(int sig)
+{
+  hangup = 1;
+}
 
 void tty_setup(int sig)
 {
@@ -498,6 +508,11 @@ void main(int argc, char **argv)
   sigaction(SIGCONT, &action, 0);
   tty_setup(0);
 
+  action.sa_handler = gone;
+  sigaction(SIGHUP, &action, 0);
+  sigaction(SIGINT, &action, 0);
+  sigaction(SIGTERM, &action, 0);
+
   timelog_path = argv[1];
   log_fd = open(timelog_path, O_RDWR | O_CREAT, 0644);
   if (log_fd < 0) {
@@ -512,7 +527,7 @@ void main(int argc, char **argv)
   }
 
   log_scan();
-  while (stack || is_break) {
+  while ((stack || is_break) && !hangup) {
     write_prompt(is_break ? 0 : stack);
     text = readln(is_break ? 0 : stack);
 #ifdef DEBUG
@@ -521,6 +536,8 @@ void main(int argc, char **argv)
 #endif
     update_tasks(text);
   }
+  if (!is_break)
+    update_tasks(0);
   fclose(timelog_file);
   exit(0);
 }
