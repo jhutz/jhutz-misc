@@ -541,7 +541,7 @@ void main(int argc, char **argv)
     update_tasks(text);
     if (hangup > 0) hangup = 0;
   }
-  if (!is_break)
+  if (stack && !is_break)
     update_tasks(0);
   fclose(timelog_file);
   tcsetattr(0, TCSANOW, &orig_tty_settings);
