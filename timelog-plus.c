@@ -290,7 +290,7 @@ void update_tasks(char *text)
     else {
       task = (task_info *)xmalloc(sizeof(task_info), 0);
       task->next = stack;
-      task->desc = xmalloc(strlen(text + 1), 0);
+      task->desc = xmalloc(strlen(text) + 1, 0);
       strcpy(task->desc, text);
       task->start_time = when;
       task->time_logged = 0;
