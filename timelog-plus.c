@@ -89,7 +89,7 @@ void log_task(task_info *task, unsigned long add_time, int state)
 
   make_hms(total_time, hh, mm, ss);
   fprintf(timelog_file, "%02d-%3s-%04d %c %02d:%02d:%02d-%02d:%02d:%02d"
-                        "  %3d:%02d:%02d  %-1.40s\n",
+                        "  %3d:%02d:%02d  %s\n",
     tm_start.tm_mday, months[tm_start.tm_mon], tm_start.tm_year+1900,
     state == TASK_STATE_DONE ? '*' : '_',
     tm_start.tm_hour, tm_start.tm_min, tm_start.tm_sec,
@@ -103,7 +103,7 @@ void log_task(task_info *task, unsigned long add_time, int state)
 void log_scan(void)
 {
   int sDD, sYY, shh, smm, sss, hh, mm, ss, n;
-  char x[4], desc[41], state;
+  char x[4], *desc, state;
   struct tm when;
   task_info *task;
   off_t where;
@@ -113,8 +113,9 @@ void log_scan(void)
   fseek(timelog_file, 0, SEEK_SET);
   for (;;) {
     where = ftell(timelog_file);
-    n = fscanf(timelog_file, "%d-%3s-%d %c %d:%d:%d-%*d:%*d:%*d %d:%d:%d %[^\n]\n",
-               &sDD, x, &sYY, &state, &shh, &smm, &sss, &hh, &mm, &ss, desc);
+    desc = 0;
+    n = fscanf(timelog_file, "%d-%3s-%d %c %d:%d:%d-%*d:%*d:%*d %d:%d:%d %m[^\n]\n",
+               &sDD, x, &sYY, &state, &shh, &smm, &sss, &hh, &mm, &ss, &desc);
 #ifdef DEBUG
     printf("Read %d fields: %s", n, n < 11 ? "Done!\n" : "");
 #endif
@@ -123,12 +124,14 @@ void log_scan(void)
     printf("%02d-%s-%04d %c %02d:%02d:%02d %3d:%02d:%02d %s\n",
            sDD, x, sYY, state, shh, smm, sss, hh, mm, ss, desc);
 #endif
-    if (state == '*') continue;
+    if (state == '*') {
+      free(desc);
+      continue;
+    }
 
     task = (task_info *)xmalloc(sizeof(task_info), 0);
     task->next = stack;
-    task->desc = xmalloc(strlen(desc) + 1, 0);
-    strcpy(task->desc, desc);
+    task->desc = desc;
     task->where = where;
     scan_hms(task->time_logged, hh, mm, ss);
 
