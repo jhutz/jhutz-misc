@@ -209,9 +209,10 @@ void update_tasks(char *text)
   time_t now = time(0);
   time_t when = now;
   struct tm tm_when = *(localtime(&when));
-  struct task_info *task;
+  struct task_info *task, *parent;
   unsigned long add_time;
   int hh, mm, finish, start_break;
+  unsigned long swap = 0;
   char *x;
 
   if (text) {
@@ -251,14 +252,40 @@ void update_tasks(char *text)
 
     /* Now, what is the event? */
     finish = start_break = 0;
-    if (!*text) finish = 1;
-    else if (!strcmp(text, ".") || !strcasecmp(text, "break")) start_break = 1;
+    if (!*text) {
+      /* empty -> end current task or break */
+      finish = 1;
+    } else if (!strcmp(text, ".") || !strcasecmp(text, "break")) {
+      /* . or "break" starts a break */
+      start_break = 1;
+    } else if (text[0] == '^') {
+      /* ^ exchanges top 2 items
+       * ^n rolls nth item below to the top
+       * (i.e. ^ is the same as ^1)
+       */
+      swap = strtol(text + 1, &x, 10);
+      if (text[1] && *x) {
+        fputs("\aInvalid swap/roll command\n", stdout);
+        fflush(stdout);
+        return;
+      }
+      if (!swap) swap = 1;
+      if (task_depth < swap + 1) {
+        printf("\aThere are fewer than %ld tasks on the stack!\n", swap + 1);
+        fflush(stdout);
+        return;
+      }
+      if (is_break) {
+        swap = 0;
+        finish = 1;
+      }
+    }
   } else {
 #ifdef DEBUG
     printf("Time is %02d:%02d:%02d; no text\n",
            tm_when.tm_hour, tm_when.tm_min, tm_when.tm_sec);
 #endif
-    finish = 0;
+    finish = swap = 0;
     start_break = 1;
   }
 
@@ -276,6 +303,7 @@ void update_tasks(char *text)
   printf("BEFORE: task_depth=%d, is_break=%d\n", task_depth, is_break);
 #endif
 
+
   /* Take some action... */
   if (finish) {                       /* Finish a task (or break) */
     task_depth--;
@@ -287,6 +315,14 @@ void update_tasks(char *text)
       free(task);
       if (!stack) is_break = task_depth = 1;
     }
+  } else if (swap) {                  /* Swap or roll tasks */
+    for (parent = stack; --swap; parent = parent->next);
+    task = parent->next;
+
+    parent->next = task->next;
+    task->next = stack;
+    stack = task;
+    return;
   } else {                            /* Start a task (or break) */
     if (!is_break) task_depth++;
     if (start_break) is_break = 1;
