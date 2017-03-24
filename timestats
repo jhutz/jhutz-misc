@@ -1,7 +1,7 @@
-#!/usr/local/bin/perl5
+#!/usr/bin/perl
 # timestats - Compute statistics on timelog data
 
-require 'getopts.pl';
+use Getopt::Std;
 
 
 $header = '
@@ -41,9 +41,9 @@ sub usage {
 
 ## Parse arguments and stuff
 sub parse_args {
-  $opt_C = "/afs/cs.cmu.edu/user/jhutz/usr/Private/timelog/Categories\n";
+  $opt_C = "$ENV{HOME}/.timelog/Categories\n";
 
-  &Getopts('C:acdehstw') || &usage();
+  getopts('C:acdehstw') || &usage();
   &usage() if ($opt_h);
 
   if ($opt_a)
