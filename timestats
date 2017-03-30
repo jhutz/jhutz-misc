@@ -4,19 +4,34 @@
 use Getopt::Std;
 
 
-$header = '
+$header_hours = '
 %-15s  Time       Pct   Description
 ===============  =========  ====  ============================================
 ';
 
-format STDOUT =
+format STDOUT_hours =
 @<<<<<<<<<<<<<<  @>>>>>>>>  @>>%  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 $category,       $hms,      $pct, $desc
 .
 
-format nopct =
+format nopct_hours =
 @<<<<<<<<<<<<<<  @>>>>>>>>        @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 $category,       $hms,            $desc
+.
+
+$header = '
+%-15s  Pct   Description
+===============  ====  =======================================================
+';
+
+format STDOUT =
+@<<<<<<<<<<<<<<  @>>%  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$category,       $pct, $desc
+.
+
+format nopct =
+@<<<<<<<<<<<<<<        @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$category,             $desc
 .
 
 
@@ -32,6 +47,7 @@ sub usage {
   print STDERR "  -d        debug effort categories\n";
   print STDERR "  -e        print summary by effort category\n";
   print STDERR "  -h        print this help message\n";
+  print STDERR "  -H        include hours\n";
   print STDERR "  -s        print summary by subtag\n";
   print STDERR "  -t        print summary by tag (default)\n";
   print STDERR "  -w        print summary by work-type\n";
@@ -43,13 +59,14 @@ sub usage {
 sub parse_args {
   $opt_C = "$ENV{HOME}/.timelog/Categories\n";
 
-  getopts('C:acdehstw') || &usage();
+  getopts('C:acdehHstw') || &usage();
   &usage() if ($opt_h);
 
   if ($opt_a)
     { $opt_c = $opt_e = $opt_s = $opt_t = $opt_w = 1 }
   if (!$opt_c && !$opt_e && !$opt_s && !$opt_t && !$opt_w)
     { $opt_t = 1 }
+  $header = $header_hours if $opt_H;
 }
 
 
@@ -135,7 +152,7 @@ sub print_summary_line {
   $mm = $time % 60; $hh   = ($time - $mm) / 60;
 
   $hms = sprintf("%3d:%02d:%02d", $hh, $mm, $ss);
-  $~ = ($category eq '---') ? 'nopct' : 'STDOUT';
+  $~ = (($category eq '---') ? 'nopct' : 'STDOUT') . ($opt_H ? '_hours' : '');
   write;
 }
 
