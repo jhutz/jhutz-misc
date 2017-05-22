@@ -190,12 +190,12 @@ void write_stack(void)
 {
   struct task_info *T;
   struct tm start;
-  int hh, mm, ss;
+  int hh, mm, ss, i;
 
-  for (T = stack; T; T = T->next) {
+  for (T = stack, i = 0; T; T = T->next, i++) {
     start = *(localtime(&T->start_time));
     make_hms(T->time_logged, hh, mm, ss);
-    printf(">> %02d:%02d [%d:%02d:%02d] %s\n",
+    printf("%d>> %02d:%02d [%d:%02d:%02d] %s\n", i,
            start.tm_hour, start.tm_min, hh, mm, ss, T->desc);
   }
   fflush(stdout);
