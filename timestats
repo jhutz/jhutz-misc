@@ -48,6 +48,7 @@ sub usage {
   print STDERR "  -e        print summary by effort category\n";
   print STDERR "  -h        print this help message\n";
   print STDERR "  -H        include hours\n";
+  print STDERR "  -I        ignore /(no)?work in percentages\n";
   print STDERR "  -s        print summary by subtag\n";
   print STDERR "  -t        print summary by tag (default)\n";
   print STDERR "  -w        print summary by work-type\n";
@@ -59,7 +60,7 @@ sub usage {
 sub parse_args {
   $opt_C = "$ENV{HOME}/.timelog/Categories\n";
 
-  getopts('C:acdehHstw') || &usage();
+  getopts('C:acdehHIstw') || &usage();
   &usage() if ($opt_h);
 
   if ($opt_a)
@@ -132,6 +133,7 @@ sub read_timelogs {
     if ($tag =~ /\:/)                 { ($tagmaj, $tagmin) = ($`, $') }
     else { $tagmaj = $tag; $tagmin = '' }
     $time = ($hh * 3600) + ($mm * 60) + $ss;
+    next if $opt_I && ($work eq 'work' || $work eq 'nowork');
     $Total_Time += $time;
     $TagMaj_Time{$tagmaj} += $time;
     $Tag_Time{$tag} += $time;
