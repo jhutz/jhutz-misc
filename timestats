@@ -118,6 +118,7 @@ sub read_timelogs {
     } elsif (/^\d+\/\d+[\s_\*]+\d+:\d+-\d+:\d+\s+(\d+):(\d+):(\d+)\s+(.*\S+)\s*$/) {
       ($hh, $mm, $ss, $desc) = ($1, $2, $3, $4);
     } else { next }
+    $desc = '[misc/work]' if $desc eq '-';
     if ($desc =~ /^\[([^]\s]+)\]\s*/) {
       ($tag, $desc) = ($1, $');
       $tag = 'mg/mg' if ($tag eq 'mg');
